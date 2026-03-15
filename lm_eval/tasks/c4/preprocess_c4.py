@@ -33,7 +33,7 @@ def c4_detokenizer(doc):
     string = string.replace(" N ", " 1 ")
     string = string.replace(" 's", "'s")
 
-    return string
+    return string[:2048]
 
 
 def process_results(doc, results):

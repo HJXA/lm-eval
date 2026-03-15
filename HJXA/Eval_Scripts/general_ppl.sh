@@ -2,25 +2,22 @@
 export HF_ENDPOINT=https://hf-mirror.com
 
 # 锁定使用 GPU
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=2
 
 # --- 1. 配置区域 ---
 # 
 # 任务列表
-# TASKS_ARRAY=("ai2_arc,hellaswag,openbookqa,piqa,mmlu,commonsense_qa")
-# mmlu_continuation gsm8k ifeval
-TASKS_ARRAY=("gsm8k,ifeval")
+TASKS_ARRAY=("c4,ai2_arc,hellaswag,openbookqa,piqa,commonsense_qa,mmlu_continuation")
 shots=0
 
 # ✅ 可以写多个 base_dir
 BASE_DIRS=(
-# "/data/jxhe/LLM/checkpoints/OLMo_checkpoints/little_sets"
-# "/data/jxhe/LLM/checkpoints/OLMo2_checkpoints/little_sets"
-
+# "/data/jxhe/LLM/checkpoints/OLMo_checkpoints/little_sets"  # PT 要带 little_sets，INS 不要
+# "/data/jxhe/LLM/github/Chain-of-Embedding/My/MLLM/Train/LLaMA-Factory/model/olmo_general_sft_cpt_models"
 )
 
-LOG_ROOT= # "/data/jxhe/LLM/github/Chain-of-Embedding/My/MLLM/Eval/lm-evaluation-harness/eval_logs"
-RESULT_ROOT= # "/data/jxhe/LLM/github/Chain-of-Embedding/My/MLLM/Eval/lm-evaluation-harness/results"
+LOG_ROOT="./lm-eval/eval_logs"
+RESULT_ROOT="./lm-eval/results"
 
 # --- 2. 任务字符串处理 ---
 TASK_LIST=$(IFS=,; echo "${TASKS_ARRAY[*]}")
@@ -37,9 +34,6 @@ for BASE_DIR in "${BASE_DIRS[@]}"; do
         continue
     fi
 
-    # PARENT_NAME=$(basename "$(dirname "$BASE_DIR")")
-    # BASE_NAME=$(basename "$BASE_DIR")
-    # FULL_BASE_NAME="${PARENT_NAME}/${BASE_NAME}"
     BASE_NAME=$(basename "$BASE_DIR")
 
     # 判断是否以 little_sets 结尾
@@ -47,9 +41,11 @@ for BASE_DIR in "${BASE_DIRS[@]}"; do
         # 如果是，取两级：父目录/little_sets
         PARENT_NAME=$(basename "$(dirname "$BASE_DIR")")
         FULL_BASE_NAME="${PARENT_NAME}/${BASE_NAME}"
+        USE_CHAT_TEMPLATE=false
     else
         # 如果不是，只取最后结尾一级
         FULL_BASE_NAME="${BASE_NAME}"
+        USE_CHAT_TEMPLATE=true
     fi
 
     TARGET_LOG_DIR="${LOG_ROOT}/${TASK_DIR_NAME}/${FULL_BASE_NAME}/shots_${shots}"
@@ -75,18 +71,17 @@ for BASE_DIR in "${BASE_DIRS[@]}"; do
 
         echo "正在评测模型: $model_name"
 
+
         lm_eval --model vllm \
-            --model_args "pretrained=${model_path},tensor_parallel_size=1,dtype=auto,gpu_memory_utilization=0.75,enable_thinking=False" \
+            --model_args "pretrained=${model_path},tensor_parallel_size=1,dtype=auto,gpu_memory_utilization=0.5,enable_thinking=False" \
             --tasks "$TASK_LIST" \
             --device cuda:0 \
             --batch_size auto \
             --num_fewshot "$shots" \
             --log_samples \
             --output_path "$RESULTS_DIR" \
-            --apply_chat_template \
             2>&1 | tee "$log_file"
 
-        # --apply_chat_template 可能只能在INS模型上用
 
         echo "模型 $model_name 评测完成。"
         echo "---------------------------------------------------------------"
