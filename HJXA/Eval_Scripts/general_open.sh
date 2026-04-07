@@ -17,12 +17,7 @@ BASE_DIRS=(
 # "/data/jxhe/LLM/checkpoints/OLMo_checkpoints/little_sets"  # PT 要带 little_sets，INS 不要
 # "/data/jxhe/LLM/github/Chain-of-Embedding/My/MLLM/Train/LLaMA-Factory/model/olmo_general_sft_cpt_models"
 
-# "/ruilab/jxhe/CoE_Monitor/checkpoints/sft_models/General_SFT_HJXA_Llama_5M_no_packing_no_padding_free"
-# "/ruilab/jxhe/CoE_Monitor/checkpoints/sft_models/General_SFT_HJXA_Llama_5M"
-# "/ruilab/jxhe/CoE_Monitor/checkpoints/sft_models/General_SFT_HJXA_Llama_5M_bug"
-"/ruilab/jxhe/CoE_Monitor/checkpoints/sft_models/General_SFT_HJXA_Llama_104M_Minimind"
-"/ruilab/jxhe/CoE_Monitor/checkpoints/sft_models/General_SFT_HJXA_Llama_104M_Minimind_no_packing_no_padding_free"
-"/ruilab/jxhe/CoE_Monitor/checkpoints/sft_models/General_SFT_HJXA_Llama_104M_Minimind_bug"
+
 
 
 

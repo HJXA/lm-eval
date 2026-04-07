@@ -1,9 +1,10 @@
 #!/bin/bash
 export HF_ENDPOINT=https://hf-mirror.com
 export HF_DATASETS_OFFLINE=1
+export PATH="/ruilab/jxhe/miniconda3/envs/lmeval/bin:$PATH"
 
 # 锁定使用 GPU
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=0
 
 # --- 1. 配置区域 ---
 # 
@@ -15,20 +16,10 @@ shots=0
 BASE_DIRS=(
 # "/data/jxhe/LLM/checkpoints/OLMo_checkpoints/little_sets"  # PT 要带 little_sets，INS 不要
 # "/data/jxhe/LLM/github/Chain-of-Embedding/My/MLLM/Train/LLaMA-Factory/model/olmo_general_sft_cpt_models"
-# "/ruilab/jxhe/CoE_Monitor/checkpoints/pt_models/PT_HJXA_Llama_104M_Minimind_no_packing_no_padding_free/little_sets"
-# "/ruilab/jxhe/CoE_Monitor/checkpoints/pt_models/PT_HJXA_Llama_104M_Minimind/little_sets"
-# "/ruilab/jxhe/CoE_Monitor/checkpoints/pt_models/PT_HJXA_Llama_5M_no_packing_no_padding_free/little_sets"
-# "/ruilab/jxhe/CoE_Monitor/checkpoints/pt_models/PT_HJXA_Llama_5M/little_sets"
-# "/ruilab/jxhe/CoE_Monitor/checkpoints/pt_models/padding_free_bug/PT_HJXA_Llama_104M_Minimind_bug/little_sets"
-# "/ruilab/jxhe/CoE_Monitor/checkpoints/pt_models/padding_free_bug/PT_HJXA_Llama_55M_bug/little_sets"
-# "/ruilab/jxhe/CoE_Monitor/checkpoints/pt_models/padding_free_bug/PT_HJXA_Llama_5M_bug/little_sets"
 
-# "/ruilab/jxhe/CoE_Monitor/checkpoints/sft_models/General_SFT_HJXA_Llama_5M_no_packing_no_padding_free"
-# "/ruilab/jxhe/CoE_Monitor/checkpoints/sft_models/General_SFT_HJXA_Llama_5M"
-# "/ruilab/jxhe/CoE_Monitor/checkpoints/sft_models/General_SFT_HJXA_Llama_5M_bug"
-"/ruilab/jxhe/CoE_Monitor/checkpoints/sft_models/General_SFT_HJXA_Llama_104M_Minimind"
-"/ruilab/jxhe/CoE_Monitor/checkpoints/sft_models/General_SFT_HJXA_Llama_104M_Minimind_bug"
-"/ruilab/jxhe/CoE_Monitor/checkpoints/sft_models/General_SFT_HJXA_Llama_104M_Minimind_no_packing_no_padding_free"
+"/ruilab/jxhe/CoE_Monitor/checkpoints/pt_models/PT_Pythia_14M/little_sets"
+
+
 )
 
 LOG_ROOT="./lm-eval/eval_logs"
