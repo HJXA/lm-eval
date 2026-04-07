@@ -161,64 +161,13 @@ MODELS = {
     #     "pt_pattern": r'tokens_([0-9.]+)B',
     # },
 
-    "PT_HJXA_Llama_104M_Minimind_no_packing_no_padding_free": {
-        "root": "/ruilab/jxhe/CoE_Monitor/ms-swift/coe_train_result/PT_HJXA_Llama_104M_Minimind_no_packing_no_padding_free",
-        "sft_folder": "General_SFT_HJXA_Llama_104M_Minimind_no_packing_no_padding_free",
+    "PT_Pythia_14M": {
+        "root": "/ruilab/jxhe/CoE_Monitor/ms-swift/coe_train_result/PT_Pythia_14M",
         "eval_pattern": r'checkpoint-([0-9.]+)',
         "coe_pattern": r'(\d+)B',
-        "pt_folder": "PT_HJXA_Llama_104M_Minimind_no_packing_no_padding_free/little_sets",
+        "pt_folder": "PT_Pythia_14M/little_sets",
         "pt_pattern": r'checkpoint-([0-9.]+)',
     },
-    "PT_HJXA_Llama_104M_Minimind": {
-        "root": "/ruilab/jxhe/CoE_Monitor/ms-swift/coe_train_result/PT_HJXA_Llama_104M_Minimind",
-        "sft_folder": "General_SFT_HJXA_Llama_104M_Minimind",
-        "eval_pattern": r'checkpoint-([0-9.]+)',
-        "coe_pattern": r'(\d+)B',
-        "pt_folder": "PT_HJXA_Llama_104M_Minimind/little_sets",
-        "pt_pattern": r'checkpoint-([0-9.]+)',
-    },
-    "PT_HJXA_Llama_5M_no_packing_no_padding_free": {
-        "root": "/ruilab/jxhe/CoE_Monitor/ms-swift/coe_train_result/PT_HJXA_Llama_5M_no_packing_no_padding_free",
-        "sft_folder": "General_SFT_HJXA_Llama_5M_no_packing_no_padding_free",
-        "eval_pattern": r'checkpoint-([0-9.]+)',
-        "coe_pattern": r'(\d+)B',
-        "pt_folder": "PT_HJXA_Llama_5M_no_packing_no_padding_free/little_sets",
-        "pt_pattern": r'checkpoint-([0-9.]+)',
-    },
-    "PT_HJXA_Llama_5M": {
-        "root": "/ruilab/jxhe/CoE_Monitor/ms-swift/coe_train_result/PT_HJXA_Llama_5M",
-        "sft_folder": "General_SFT_HJXA_Llama_5M",
-        "eval_pattern": r'checkpoint-([0-9.]+)',
-        "coe_pattern": r'(\d+)B',
-        "pt_folder": "PT_HJXA_Llama_5M/little_sets",
-        "pt_pattern": r'checkpoint-([0-9.]+)',
-    },
-
-
-    "PT_HJXA_Llama_5M_bug": {
-        "root": "/ruilab/jxhe/CoE_Monitor/ms-swift/coe_train_result/padding_free_bug/PT_HJXA_Llama_5M",
-        "eval_pattern": r'checkpoint-([0-9.]+)',
-        "sft_folder": "General_SFT_HJXA_Llama_5M_bug",
-        "coe_pattern": r'(\d+)B',
-        "pt_folder": "PT_HJXA_Llama_5M_bug/little_sets", 
-        "pt_pattern": r'checkpoint-([0-9.]+)',
-    },
-    # "PT_HJXA_Llama_55M_bug": {
-    #     "root": "/ruilab/jxhe/CoE_Monitor/ms-swift/coe_train_result/padding_free_bug/PT_HJXA_Llama_55M",
-    #     "eval_pattern": r'checkpoint-([0-9.]+)',
-    #     "coe_pattern": r'(\d+)B',
-    #     "pt_folder": "PT_HJXA_Llama_55M_bug/little_sets", 
-    #     "pt_pattern": r'checkpoint-([0-9.]+)',
-    # },
-    "PT_HJXA_Llama_104M_Minimind_bug": {
-        "root": "/ruilab/jxhe/CoE_Monitor/ms-swift/coe_train_result/padding_free_bug/PT_HJXA_Llama_104M_Minimind",
-        "sft_folder": "General_SFT_HJXA_Llama_104M_Minimind_bug",
-        "eval_pattern": r'checkpoint-([0-9.]+)',
-        "coe_pattern": r'(\d+)B',
-        "pt_folder": "PT_HJXA_Llama_104M_Minimind_bug/little_sets", 
-        "pt_pattern": r'checkpoint-([0-9.]+)',
-    },
-    
     
 }
 
