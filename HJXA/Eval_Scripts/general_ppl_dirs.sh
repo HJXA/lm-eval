@@ -16,8 +16,8 @@ shots=0
 BASE_DIRS=(
 # "/data/jxhe/LLM/checkpoints/OLMo_checkpoints/little_sets"  # PT 要带 little_sets，INS 不要
 # "/data/jxhe/LLM/github/Chain-of-Embedding/My/MLLM/Train/LLaMA-Factory/model/olmo_general_sft_cpt_models"
+# "/ruilab/jxhe/CoE_Monitor/checkpoints/pt_models/PT_Pythia_14M/little_sets"
 
-"/ruilab/jxhe/CoE_Monitor/checkpoints/pt_models/PT_Pythia_14M/little_sets"
 
 
 )
