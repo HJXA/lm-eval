@@ -7,7 +7,7 @@ export PATH="/ruilab/jxhe/miniconda3/envs/lmeval/bin:$PATH"
 export CUDA_VISIBLE_DEVICES=0
 
 # --- 1. 配置区域 ---
-# 
+#
 # 任务列表
 TASKS_ARRAY=("ai2_arc,hellaswag,openbookqa,piqa,commonsense_qa,mmlu_continuation")
 shots=0
@@ -65,9 +65,43 @@ for BASE_DIR in "${BASE_DIRS[@]}"; do
     echo "日志目录: $TARGET_LOG_DIR"
     echo "==============================================================="
 
-    # --- 4. 遍历当前 BASE_DIR 下的所有模型 ---
-    for model_path in "$BASE_DIR"/*/; do
-        model_name=$(basename "${model_path%/}")
+    # --- 4. 自动寻找模型目录 ---
+    # 找到所有包含 config.json 的模型目录
+    mapfile -t ALL_PATHS < <(
+      find "$BASE_DIR" -type f -name "config.json" \
+        | sed 's#/config.json##' \
+        | sort -V
+    )
+
+    if [ "${#ALL_PATHS[@]}" -eq 0 ]; then
+        echo "警告: 在 $BASE_DIR 下没有找到包含 config.json 的模型目录"
+        continue
+    fi
+
+    # 按版本目录分组，每组只保留最后一个 checkpoint（步数最大）
+    MODEL_PATHS=()
+    prev_version_dir=""
+    last_in_group=""
+    for mp in "${ALL_PATHS[@]}"; do
+        version_dir=$(dirname "$mp")
+        if [ "$version_dir" != "$prev_version_dir" ] && [ -n "$prev_version_dir" ]; then
+            MODEL_PATHS+=("$last_in_group")
+        fi
+        last_in_group="$mp"
+        prev_version_dir="$version_dir"
+    done
+    if [ -n "$last_in_group" ]; then
+        MODEL_PATHS+=("$last_in_group")
+    fi
+
+    # --- 5. 遍历模型 ---
+    for model_path in "${MODEL_PATHS[@]}"; do
+
+        rel_path="${model_path#$BASE_DIR/}"
+
+        # 把路径里的 / 替换成 __，避免日志文件名冲突
+        model_name=$(echo "$rel_path" | sed 's#/#__#g')
+
         log_file="${TARGET_LOG_DIR}/${model_name}_${shots}.log"
 
         if [ -f "$log_file" ]; then
@@ -77,6 +111,10 @@ for BASE_DIR in "${BASE_DIRS[@]}"; do
 
         echo "正在评测模型: $model_name"
 
+        EXTRA_ARGS=""
+        if [ "$USE_CHAT_TEMPLATE" = true ]; then
+            EXTRA_ARGS="--apply_chat_template"
+        fi
 
         lm_eval --model vllm \
             --model_args "pretrained=${model_path},tensor_parallel_size=1,dtype=auto,gpu_memory_utilization=0.4,enable_thinking=False" \
@@ -86,6 +124,7 @@ for BASE_DIR in "${BASE_DIRS[@]}"; do
             --num_fewshot "$shots" \
             --log_samples \
             --output_path "$RESULTS_DIR" \
+            $EXTRA_ARGS \
             2>&1 | tee "$log_file"
 
 

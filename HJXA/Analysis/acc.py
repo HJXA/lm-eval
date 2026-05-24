@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import gzip
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
@@ -35,14 +36,15 @@ safe_configure_torch_threads(1, 1)
 
 RANKS = list(range(4))
 
-EXCLUDED_TASKS = ["c4"]
+# EXCLUDED_TASKS = ["c4"]
+EXCLUDED_TASKS = []
 
 
 # 全局变量：1 Step 对应多少 token（默认 1M）
 TOKENS_PER_STEP = 1_000_000
 # 统一换算到 Billion token（B）
 TOKENS_PER_STEP_GLOBAL = TOKENS_PER_STEP / 1e9
-READ_MAX_WORKERS = min(16, max(4, (os.cpu_count() or 8)))
+READ_MAX_WORKERS = min(32, max(4, (os.cpu_count() or 8)))
 
 # 平滑配置：Time-weighted EMA
 ENABLE_TIME_WEIGHTED_EMA = True
@@ -50,10 +52,10 @@ TW_EMA_ALPHA = 0.1
 
 # 任务分组 (来自第二段代码)
 TASK_GROUPS = {
-    "C4": {
-        "title": "C4",
-        "tasks": ["c4"]
-    },
+    # "C4": {
+    #     "title": "C4",
+    #     "tasks": ["c4"]
+    # },
     "commonsense": {
         "title": "Commonsense Reasoning",
         "tasks": ["hellaswag", "piqa", "commonsense_qa"]
@@ -83,7 +85,7 @@ FILE_NAME_MAP = {
     "mmlu": "MMLU.png",
     "Ifeval": "Ifeval.png",
     "Math": "Math.png",
-    "C4": "C4.png",
+    # "C4": "C4.png",
 }
 
 TASKS = {
@@ -130,10 +132,10 @@ TASKS = {
         "pt_eval_base": "./lm-eval/results/gsm8k,minerva_math",
         "metric": "math_verify,none"
     },
-    "c4": {
-        "eval_base": "./lm-eval/results/c4",
-        "metric": "byte_perplexity,none",
-    }
+    # "c4": {
+    #     "eval_base": "./lm-eval/results/c4",
+    #     "metric": "byte_perplexity,none",
+    # }
 }
 
 
@@ -144,10 +146,12 @@ TASKS = {
 
 ASI_CACHE = {}
 
-RUN_TYPE = "general"  # "general" / "math"
+RUN_TYPE = "math"  # "general" / "math"
 
 SAVE_DIR = f"./lm-eval/HJXA/Analysis/SFT_Analysis/Acc_Figures/{RUN_TYPE}"
 os.makedirs(SAVE_DIR, exist_ok=True)
+COE_CACHE_FILENAME = "coe_metrics_cache.json"
+COE_CACHE_VERSION = 1
 
 MODELS = {
     # ================= MiniMind =================
@@ -161,10 +165,27 @@ MODELS = {
     #     "pt_pattern": r'tokens_([0-9.]+)B',
     # },
 
-    "PT_Pythia_14M": {
-        "root": "/ruilab/jxhe/CoE_Monitor/ms-swift/coe_train_result/PT_Pythia_14M",
-        "eval_pattern": r'checkpoint-([0-9.]+)',
+    # "PT_Pythia_14M": {
+    #     "root": "/ruilab/jxhe/CoE_Monitor/ms-swift/coe_train_result/PT_Pythia_14M",
+    #     "eval_pattern": r'checkpoint-([0-9.]+)',
+    #     "coe_pattern": r'(\d+)B',
+    #     "pt_folder": "PT_Pythia_14M/little_sets",
+    #     "pt_pattern": r'checkpoint-([0-9.]+)',
+    # },
+    "llama-0.5B-350B-math-full": {
+        "root": "/ruilab2/PT-LLaMA-0.5B-FineWeb-edu-350B/hidden_state",
+
+        # SFT 结果目录：
+        # ./lm-eval/results/gsm8k,minerva_math/llama-0.5B-350B-math-full/shots_0
+        "sft_folder": "llama-0.5B-350B-math-full",
+
+        # 解析 SFT 文件夹名里的第一个 checkpoint，比如：
+        # __...__checkpoint-100000__v0-...__checkpoint-10000
+        # 会解析出 100000
+        "eval_pattern": r'__checkpoint-(\d+)__v\d+-',
+
         "coe_pattern": r'(\d+)B',
+
         "pt_folder": "PT_Pythia_14M/little_sets",
         "pt_pattern": r'checkpoint-([0-9.]+)',
     },
@@ -441,7 +462,11 @@ def compute_metrics_wrapper(file_paths):
 
     for file_path in file_paths:
         try:
-            raw_tensor = torch.load(file_path, map_location='cpu', weights_only=False)
+            if file_path.endswith('.gz'):
+                with gzip.open(file_path, 'rb') as f:
+                    raw_tensor = torch.load(f, map_location='cpu', weights_only=False)
+            else:
+                raw_tensor = torch.load(file_path, map_location='cpu', weights_only=False)
             tensor = raw_tensor.detach().to(torch.float32).numpy()
         except Exception:
             # print(f"Error loading {file_path}: {e}")
@@ -496,73 +521,164 @@ def process_single_task(args):
     asi_full = (z_ang + a_in + a_mid + a_out) / 4.0
     return tokens_b, asi_full
 
-def get_asi_metrics(root_path, batch_size=128, plot_interval=100):
+def get_model_save_dir(model_key):
+    return os.path.join(SAVE_DIR, model_key or "UnknownModel")
+
+
+def get_coe_cache_path(model_key):
+    return os.path.join(get_model_save_dir(model_key), COE_CACHE_FILENAME)
+
+
+def collect_coe_step_map(root_path):
+    """收集 COE 隐状态文件，按 step 聚合。"""
+    # Collect version directories
+    version_dirs = []
+    for d in os.listdir(root_path):
+        dpath = os.path.join(root_path, d)
+        if os.path.isdir(dpath) and re.match(r'v\d+-', d):
+            version_dirs.append(d)
+    # Lexical sort = chronological (timestamps in name)
+    version_dirs.sort()
+
+    if not version_dirs:
+        return {}
+
+    # Iterate newest-first: later versions override earlier ones for the same step
+    step_map = {}
+    for vdir in reversed(version_dirs):
+        layer_dir = os.path.join(root_path, vdir, "Layer_Hidden_Train")
+        if not os.path.isdir(layer_dir):
+            continue
+        for f in os.listdir(layer_dir):
+            m = re.search(r'Step(\d+)_Rank\d+\.pt\.gz', f)
+            if m:
+                s = int(m.group(1))
+                if s not in step_map:
+                    step_map[s] = []
+                step_map[s].append(os.path.join(layer_dir, f))
+
+    return step_map
+
+
+def build_coe_cache_fingerprint(step_map):
+    """生成轻量文件指纹，用于判断磁盘缓存是否仍然可用。"""
+    fingerprint = []
+    for step in sorted(step_map.keys()):
+        files = []
+        for file_path in sorted(step_map[step]):
+            try:
+                stat = os.stat(file_path)
+            except OSError:
+                files.append({
+                    "path": file_path,
+                    "missing": True,
+                })
+                continue
+
+            files.append({
+                "path": file_path,
+                "size": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+            })
+
+        fingerprint.append({
+            "step": step,
+            "files": files,
+        })
+
+    return fingerprint
+
+
+def load_coe_metrics_cache(cache_path, root_path, fingerprint):
+    if not os.path.exists(cache_path):
+        return None
+
+    try:
+        with open(cache_path, "r") as f:
+            payload = json.load(f)
+    except Exception as e:
+        log_message(f"[COE Cache] skip invalid cache={cache_path} reason={e}")
+        return None
+
+    if payload.get("cache_version") != COE_CACHE_VERSION:
+        return None
+    if payload.get("root_path") != root_path:
+        return None
+    if payload.get("tokens_per_step_global") != TOKENS_PER_STEP_GLOBAL:
+        return None
+    if payload.get("fingerprint") != fingerprint:
+        return None
+
+    tokens = payload.get("tokens")
+    values = payload.get("values")
+    if not isinstance(tokens, list) or not isinstance(values, list) or len(tokens) != len(values):
+        return None
+
+    log_message(f"[COE Cache] loaded: {cache_path}")
+    return tokens, values
+
+
+def save_coe_metrics_cache(cache_path, root_path, fingerprint, tokens, values):
+    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+
+    payload = {
+        "cache_version": COE_CACHE_VERSION,
+        "root_path": root_path,
+        "tokens_per_step_global": TOKENS_PER_STEP_GLOBAL,
+        "fingerprint": fingerprint,
+        "tokens": [float(x) for x in tokens],
+        "values": [float(x) for x in values],
+    }
+
+    tmp_path = f"{cache_path}.tmp"
+    with open(tmp_path, "w") as f:
+        json.dump(payload, f, indent=2)
+    os.replace(tmp_path, cache_path)
+    log_message(f"[COE Cache] saved: {cache_path}")
+
+
+def get_asi_metrics(root_path, batch_size=128, plot_interval=100, model_key="UnknownModel"):
     if not root_path:
         return [], []
-    
-    cache_key = (root_path, batch_size, plot_interval)
+
+    cache_path = get_coe_cache_path(model_key)
+    cache_key = (root_path, model_key, batch_size, plot_interval)
     if cache_key in ASI_CACHE:
         return ASI_CACHE[cache_key]
 
-    # Try locating Layer_Hidden_Train directly or via version folders
-    target_dir = os.path.join(root_path, "Layer_Hidden_Train")
-    if not os.path.exists(target_dir):
-        # Look for v* folders
-        subdirs = [os.path.join(root_path, d) for d in os.listdir(root_path) 
-                   if os.path.isdir(os.path.join(root_path, d)) and d.startswith("v")]
-        if subdirs:
-            # Sort by modification time or name, assuming latest is best or handle multiple
-            latest = sorted(subdirs)[-1]
-            target_dir = os.path.join(latest, "Layer_Hidden_Train")
-    
-    if not os.path.exists(target_dir):
-        # fallback attempting to find ANY Layer_Hidden_Train recursively depth=2
-        found = False
-        for r, ds, fs in os.walk(root_path):
-            if "Layer_Hidden_Train" in ds:
-                target_dir = os.path.join(r, "Layer_Hidden_Train")
-                found = True
-                break
-        if not found:
-            return [], []
-
-    files = [os.path.join(target_dir, f) for f in os.listdir(target_dir) if f.endswith('.pt')]
-    if not files:
-        return [], []
-
-    step_map = {}
-    for f in files:
-        m = re.search(r'Step(\d+)_Rank\d+\.pt', os.path.basename(f))
-        if m:
-            s = int(m.group(1))
-            if s not in step_map:
-                step_map[s] = []
-            step_map[s].append(f)
-    
+    step_map = collect_coe_step_map(root_path)
     if not step_map:
         return [], []
+
+    fingerprint = build_coe_cache_fingerprint(step_map)
+    cached_metrics = load_coe_metrics_cache(cache_path, root_path, fingerprint)
+    if cached_metrics is not None:
+        ASI_CACHE[cache_key] = cached_metrics
+        return cached_metrics
 
     tasks = []
     for s in sorted(step_map.keys()):
         tk = s * TOKENS_PER_STEP_GLOBAL
         tasks.append((s, tk, step_map[s]))
-    
+
     final_results = []
-    # Running in process pool
     with ProcessPoolExecutor(max_workers=8) as exe:
         futures = [exe.submit(process_single_task, t) for t in tasks]
         for fut in tqdm(as_completed(futures), total=len(futures), desc="Read COE Metrics", leave=False):
             res = fut.result()
             if res:
                 final_results.append(res)
-    
+
     final_results.sort(key=lambda x: x[0])
-    
+
     tokens = [x[0] for x in final_results]
     values = [x[1] for x in final_results] # ASI_full
 
-    ASI_CACHE[cache_key] = (tokens, values)
-    return tokens, values
+    save_coe_metrics_cache(cache_path, root_path, fingerprint, tokens, values)
+
+    metrics = (tokens, values)
+    ASI_CACHE[cache_key] = metrics
+    return metrics
 
 # =========================
 # 5. 绘图模块
@@ -604,6 +720,25 @@ def x_axis_formatter(x_prime, _pos, stage1_tokens, compression_ratio=COMPRESSION
     return f"{orig_x:g}"
 
 
+def annotate_point_values(ax, x_values, y_values, color="black", fmt="{:.3f}", y_offset=5):
+    """给曲线上的每个点标注实际绘制的 y 值。"""
+    for x, y in zip(x_values, y_values):
+        if y is None or not np.isfinite(y):
+            continue
+        ax.annotate(
+            fmt.format(float(y)),
+            (x, y),
+            textcoords="offset points",
+            xytext=(0, y_offset),
+            ha="center",
+            va="bottom" if y_offset >= 0 else "top",
+            fontsize=6,
+            color=color,
+            alpha=0.85,
+            annotation_clip=False,
+        )
+
+
 def draw_asi_plot_overall(model_key):
     """绘制全部任务平均得分"""
     config = MODELS[model_key]
@@ -625,7 +760,7 @@ def draw_asi_plot_overall(model_key):
 
     try:
         if root:
-            asi_tokens, asi_values = get_asi_metrics(root)
+            asi_tokens, asi_values = get_asi_metrics(root, model_key=model_key)
         else:
             asi_tokens, asi_values = [], []
     except Exception as e:
@@ -648,6 +783,7 @@ def draw_asi_plot_overall(model_key):
         asi_tx = transform_x(asi_tokens, stage1_tokens)
         asi_values_sm = maybe_smooth_curve(asi_tokens, asi_values)
         ax.plot(asi_tx, asi_values_sm, marker='o', linewidth=1, markersize=1, label="ASI_full", color='blue')
+        annotate_point_values(ax, asi_tx, asi_values_sm, color='blue')
         ax.set_ylabel("ASI_full", color='blue')
         ax.tick_params(axis='y', labelcolor='blue')
         ax2 = ax.twinx()
@@ -659,11 +795,13 @@ def draw_asi_plot_overall(model_key):
         sft_tx = transform_x(sft_tokens, stage1_tokens)
         sft_avgs_sm = maybe_smooth_curve(sft_tokens, sft_avgs)
         ax2.plot(sft_tx, sft_avgs_sm, color='red', linestyle='--', marker='D', label="SFT Avg")
+        annotate_point_values(ax2, sft_tx, sft_avgs_sm, color='red')
 
     if len(pt_tokens) > 0:
         pt_tx = transform_x(pt_tokens, stage1_tokens)
         pt_avgs_sm = maybe_smooth_curve(pt_tokens, pt_avgs)
         ax2.plot(pt_tx, pt_avgs_sm, color='green', linestyle='-.', marker='s', label="PT Avg")
+        annotate_point_values(ax2, pt_tx, pt_avgs_sm, color='green')
 
     ax2.set_ylabel("Average Score (PT & SFT All Tasks)")
 
@@ -734,7 +872,7 @@ def draw_asi_plot_group(model_key, group_key):
 
     try:
         if root:
-            asi_tokens, asi_values = get_asi_metrics(root)
+            asi_tokens, asi_values = get_asi_metrics(root, model_key=model_key)
         else:
             asi_tokens, asi_values = [], []
     except Exception as e:
@@ -757,6 +895,7 @@ def draw_asi_plot_group(model_key, group_key):
         asi_tx = transform_x(asi_tokens, stage1_tokens)
         asi_values_sm = maybe_smooth_curve(asi_tokens, asi_values)
         ax.plot(asi_tx, asi_values_sm, marker='o', linewidth=1, markersize=1, label="ASI_full", color='blue')
+        annotate_point_values(ax, asi_tx, asi_values_sm, color='blue')
         ax.set_ylabel("ASI_full", color='blue')
         ax.tick_params(axis='y', labelcolor='blue')
         ax2 = ax.twinx()
@@ -783,6 +922,7 @@ def draw_asi_plot_group(model_key, group_key):
                      color=color,
                      linewidth=1,
                      label=f"SFT-{task}")
+            annotate_point_values(ax2, tx, scores_sm, color=color)
 
         if task in pt_data:
 
@@ -797,6 +937,7 @@ def draw_asi_plot_group(model_key, group_key):
                      alpha=0.4,
                      linewidth=1,
                      label=f"PT-{task}")
+            annotate_point_values(ax2, tx, scores_sm, color=color)
 
     ax2.set_ylabel("Accuracy (PT & SFT)")
 
@@ -858,7 +999,7 @@ def draw_asi_plot_id_ood(model_key, subset_name, task_subset):
 
     try:
         if root:
-            asi_tokens, asi_values = get_asi_metrics(root)
+            asi_tokens, asi_values = get_asi_metrics(root, model_key=model_key)
         else:
             asi_tokens, asi_values = [], []
     except Exception as e:
@@ -883,6 +1024,7 @@ def draw_asi_plot_id_ood(model_key, subset_name, task_subset):
         asi_tx = transform_x(asi_tokens, stage1_tokens)
         asi_values_sm = maybe_smooth_curve(asi_tokens, asi_values)
         ax.plot(asi_tx, asi_values_sm, marker='o', linewidth=1, markersize=1, label="ASI_full", color='blue')
+        annotate_point_values(ax, asi_tx, asi_values_sm, color='blue')
         ax.set_ylabel("ASI_full", color='blue')
         ax.tick_params(axis='y', labelcolor='blue')
         ax2 = ax.twinx()
@@ -900,6 +1042,7 @@ def draw_asi_plot_id_ood(model_key, subset_name, task_subset):
                  linestyle='--',
                  marker='D',
                  label=f"SFT {subset_name} Avg")
+        annotate_point_values(ax2, sft_tx, sft_avgs_sm, color='red')
 
     if len(pt_tokens) > 0:
 
@@ -912,6 +1055,7 @@ def draw_asi_plot_id_ood(model_key, subset_name, task_subset):
                  linestyle='-.',
                  marker='s',
                  label=f"PT {subset_name} Avg")
+        annotate_point_values(ax2, pt_tx, pt_avgs_sm, color='green')
 
     ax2.set_ylabel(f"{subset_name} Average Score")
 

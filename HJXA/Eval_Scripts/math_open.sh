@@ -2,7 +2,7 @@
 export HF_ENDPOINT=https://hf-mirror.com
 
 # 锁定使用 GPU
-export CUDA_VISIBLE_DEVICES=3
+export CUDA_VISIBLE_DEVICES=2
 
 # --- 1. 配置区域 ---
 
@@ -62,16 +62,32 @@ for BASE_DIR in "${BASE_DIRS[@]}"; do
   echo "==============================================================="
 
   # --- 4. 自动寻找模型目录 ---
-  # 判定标准：目录下有 config.json
-  mapfile -t MODEL_PATHS < <(
+  # 找到所有包含 config.json 的模型目录
+  mapfile -t ALL_PATHS < <(
     find "$BASE_DIR" -type f -name "config.json" \
       | sed 's#/config.json##' \
-      | sort
+      | sort -V
   )
 
-  if [ "${#MODEL_PATHS[@]}" -eq 0 ]; then
+  if [ "${#ALL_PATHS[@]}" -eq 0 ]; then
     echo "警告: 在 $BASE_DIR 下没有找到包含 config.json 的模型目录"
     continue
+  fi
+
+  # 按版本目录分组，每组只保留最后一个 checkpoint（步数最大）
+  MODEL_PATHS=()
+  prev_version_dir=""
+  last_in_group=""
+  for mp in "${ALL_PATHS[@]}"; do
+      version_dir=$(dirname "$mp")
+      if [ "$version_dir" != "$prev_version_dir" ] && [ -n "$prev_version_dir" ]; then
+          MODEL_PATHS+=("$last_in_group")
+      fi
+      last_in_group="$mp"
+      prev_version_dir="$version_dir"
+  done
+  if [ -n "$last_in_group" ]; then
+      MODEL_PATHS+=("$last_in_group")
   fi
 
   # --- 5. 遍历模型 ---
