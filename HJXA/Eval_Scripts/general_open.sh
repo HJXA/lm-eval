@@ -1,9 +1,9 @@
 #!/bin/bash
 export HF_ENDPOINT=https://hf-mirror.com
 export HF_DATASETS_OFFLINE=1
-
+export PATH="/ruilab/jxhe/miniconda3/envs/lmeval/bin:$PATH"
 # 锁定使用 GPU
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=5
 # --- 1. 配置区域 ---
 #
 # 任务列表
@@ -16,7 +16,8 @@ shots=0
 BASE_DIRS=(
 # "/data/jxhe/LLM/checkpoints/OLMo_checkpoints/little_sets"  # PT 要带 little_sets，INS 不要
 # "/data/jxhe/LLM/github/Chain-of-Embedding/My/MLLM/Train/LLaMA-Factory/model/olmo_general_sft_cpt_models"
-
+"/ruilab2/hjxa/ms-swift/output/SFT/llama-0.5B-350B-general"
+# "/ruilab2/hjxa/checkpoints/pt/llama-0.5B-350B/little_sets"
 
 
 
@@ -80,20 +81,21 @@ for BASE_DIR in "${BASE_DIRS[@]}"; do
     fi
 
     # 按版本目录分组，每组只保留最后一个 checkpoint（步数最大）
-    MODEL_PATHS=()
-    prev_version_dir=""
-    last_in_group=""
-    for mp in "${ALL_PATHS[@]}"; do
-        version_dir=$(dirname "$mp")
-        if [ "$version_dir" != "$prev_version_dir" ] && [ -n "$prev_version_dir" ]; then
-            MODEL_PATHS+=("$last_in_group")
-        fi
-        last_in_group="$mp"
-        prev_version_dir="$version_dir"
-    done
-    if [ -n "$last_in_group" ]; then
-        MODEL_PATHS+=("$last_in_group")
-    fi
+    # MODEL_PATHS=()
+    # prev_version_dir=""
+    # last_in_group=""
+    # for mp in "${ALL_PATHS[@]}"; do
+    #     version_dir=$(dirname "$mp")
+    #     if [ "$version_dir" != "$prev_version_dir" ] && [ -n "$prev_version_dir" ]; then
+    #         MODEL_PATHS+=("$last_in_group")
+    #     fi
+    #     last_in_group="$mp"
+    #     prev_version_dir="$version_dir"
+    # done
+    # if [ -n "$last_in_group" ]; then
+    #     MODEL_PATHS+=("$last_in_group")
+    # fi
+    MODEL_PATHS=("${ALL_PATHS[@]}")
 
     # --- 5. 遍历模型 ---
     for model_path in "${MODEL_PATHS[@]}"; do
@@ -118,7 +120,7 @@ for BASE_DIR in "${BASE_DIRS[@]}"; do
         fi
 
         lm_eval --model vllm \
-            --model_args "pretrained=${model_path},tensor_parallel_size=1,dtype=auto,gpu_memory_utilization=0.5,enable_thinking=False" \
+            --model_args "pretrained=${model_path},tensor_parallel_size=1,dtype=auto,gpu_memory_utilization=0.3,enable_thinking=False" \
             --tasks "$TASK_LIST" \
             --device cuda:0 \
             --batch_size auto \

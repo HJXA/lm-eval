@@ -4,7 +4,7 @@ export HF_DATASETS_OFFLINE=1
 export PATH="/ruilab/jxhe/miniconda3/envs/lmeval/bin:$PATH"
 
 # 锁定使用 GPU
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=4
 
 # --- 1. 配置区域 ---
 #
@@ -17,7 +17,8 @@ BASE_DIRS=(
 # "/data/jxhe/LLM/checkpoints/OLMo_checkpoints/little_sets"  # PT 要带 little_sets，INS 不要
 # "/data/jxhe/LLM/github/Chain-of-Embedding/My/MLLM/Train/LLaMA-Factory/model/olmo_general_sft_cpt_models"
 # "/ruilab/jxhe/CoE_Monitor/checkpoints/pt_models/PT_Pythia_14M/little_sets"
-
+"/ruilab2/hjxa/ms-swift/output/SFT/llama-0.5B-350B-general"
+# "/ruilab2/hjxa/checkpoints/pt/llama-0.5B-350B/little_sets"
 
 
 )
@@ -51,7 +52,7 @@ for BASE_DIR in "${BASE_DIRS[@]}"; do
     else
         # 如果不是，只取最后结尾一级
         FULL_BASE_NAME="${BASE_NAME}"
-        USE_CHAT_TEMPLATE=true
+        USE_CHAT_TEMPLATE=false
     fi
 
     TARGET_LOG_DIR="${LOG_ROOT}/${TASK_DIR_NAME}/${FULL_BASE_NAME}/shots_${shots}"
@@ -79,20 +80,22 @@ for BASE_DIR in "${BASE_DIRS[@]}"; do
     fi
 
     # 按版本目录分组，每组只保留最后一个 checkpoint（步数最大）
-    MODEL_PATHS=()
-    prev_version_dir=""
-    last_in_group=""
-    for mp in "${ALL_PATHS[@]}"; do
-        version_dir=$(dirname "$mp")
-        if [ "$version_dir" != "$prev_version_dir" ] && [ -n "$prev_version_dir" ]; then
-            MODEL_PATHS+=("$last_in_group")
-        fi
-        last_in_group="$mp"
-        prev_version_dir="$version_dir"
-    done
-    if [ -n "$last_in_group" ]; then
-        MODEL_PATHS+=("$last_in_group")
-    fi
+    # MODEL_PATHS=()
+    # prev_version_dir=""
+    # last_in_group=""
+    # for mp in "${ALL_PATHS[@]}"; do
+    #     version_dir=$(dirname "$mp")
+    #     if [ "$version_dir" != "$prev_version_dir" ] && [ -n "$prev_version_dir" ]; then
+    #         MODEL_PATHS+=("$last_in_group")
+    #     fi
+    #     last_in_group="$mp"
+    #     prev_version_dir="$version_dir"
+    # done
+    # if [ -n "$last_in_group" ]; then
+    #     MODEL_PATHS+=("$last_in_group")
+    # fi
+
+    MODEL_PATHS=("${ALL_PATHS[@]}")
 
     # --- 5. 遍历模型 ---
     for model_path in "${MODEL_PATHS[@]}"; do

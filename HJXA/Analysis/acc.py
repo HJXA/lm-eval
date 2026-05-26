@@ -46,10 +46,6 @@ TOKENS_PER_STEP = 1_000_000
 TOKENS_PER_STEP_GLOBAL = TOKENS_PER_STEP / 1e9
 READ_MAX_WORKERS = min(32, max(4, (os.cpu_count() or 8)))
 
-# 平滑配置：Time-weighted EMA
-ENABLE_TIME_WEIGHTED_EMA = True
-TW_EMA_ALPHA = 0.1
-
 # 任务分组 (来自第二段代码)
 TASK_GROUPS = {
     # "C4": {
@@ -120,7 +116,7 @@ TASKS = {
     "ifeval": {
         "eval_base": "./lm-eval/results/ifeval",
         "pt_eval_base": "./lm-eval/results/ifeval",
-        "metric": "inst_level_strict_acc,none"
+        "metric": "prompt_level_loose_acc,none"
     },
     "gsm8k": {
         "eval_base": "./lm-eval/results/gsm8k,minerva_math",
@@ -144,12 +140,14 @@ TASKS = {
 # 2. 模型统一配置
 # =========================
 
-ASI_CACHE = {}
+ACOE_CACHE = {}
 
-RUN_TYPE = "math"  # "general" / "math"
+RUN_TYPE = "general"  # "general" / "math"
 
-SAVE_DIR = f"./lm-eval/HJXA/Analysis/SFT_Analysis/Acc_Figures/{RUN_TYPE}"
+SFT_ANALYSIS_DIR = "./lm-eval/HJXA/Analysis/SFT_Analysis"
+SAVE_DIR = os.path.join(SFT_ANALYSIS_DIR, "Acc_Figures", RUN_TYPE)
 os.makedirs(SAVE_DIR, exist_ok=True)
+ACOE_CACHE_DIR = os.path.join(SFT_ANALYSIS_DIR, "cache")
 COE_CACHE_FILENAME = "coe_metrics_cache.json"
 COE_CACHE_VERSION = 1
 
@@ -172,22 +170,28 @@ MODELS = {
     #     "pt_folder": "PT_Pythia_14M/little_sets",
     #     "pt_pattern": r'checkpoint-([0-9.]+)',
     # },
-    "llama-0.5B-350B-math-full": {
+    "llama-0.5B-350B-general": {
         "root": "/ruilab2/PT-LLaMA-0.5B-FineWeb-edu-350B/hidden_state",
 
         # SFT 结果目录：
-        # ./lm-eval/results/gsm8k,minerva_math/llama-0.5B-350B-math-full/shots_0
-        "sft_folder": "llama-0.5B-350B-math-full",
+        # ./lm-eval/results/{general_tasks}/llama-0.5B-350B-general/shots_0
+        "sft_folder": "llama-0.5B-350B-general",
 
-        # 解析 SFT 文件夹名里的第一个 checkpoint，比如：
-        # __...__checkpoint-100000__v0-...__checkpoint-10000
-        # 会解析出 100000
-        "eval_pattern": r'__checkpoint-(\d+)__v\d+-',
+        # SFT/PT 文件夹都包含 checkpoint-<step>
+        "eval_pattern": r'checkpoint-(\d+)',
 
         "coe_pattern": r'(\d+)B',
 
-        "pt_folder": "PT_Pythia_14M/little_sets",
-        "pt_pattern": r'checkpoint-([0-9.]+)',
+        # PT 结果目录：
+        # ./lm-eval/results/{general_tasks}/llama-0.5B-350B/little_sets/shots_0
+        "pt_folder": "llama-0.5B-350B/little_sets",
+        "pt_pattern": r'checkpoint-(\d+)',
+
+        # ACoE 只依赖同一个 hidden-state root，PT/SFT/general/math 共用这个 cache key。
+        "acoe_cache_key": "llama-0.5B-350B",
+        "legacy_acoe_cache_paths": [
+            "./lm-eval/HJXA/Analysis/SFT_Analysis/Acc_Figures/math/llama-0.5B-350B-math-full/coe_metrics_cache.json",
+        ],
     },
     
 }
@@ -241,36 +245,6 @@ def build_eval_root(task_cfg, model_cfg, is_sft):
         return None
     return os.path.join(base_path, folder_name, "shots_0")
 
-
-def smooth_time_weighted_ema(x_values, y_values, alpha=TW_EMA_ALPHA):
-    """按 x 间隔做 time-weighted EMA 平滑。"""
-    x = np.asarray(x_values, dtype=np.float64)
-    y = np.asarray(y_values, dtype=np.float64)
-
-    if len(x) <= 1 or len(y) <= 1:
-        return y
-
-    dx = np.diff(x)
-    positive_dx = dx[dx > 0]
-    base_dt = float(np.median(positive_dx)) if len(positive_dx) > 0 else 1.0
-    if base_dt <= 0:
-        base_dt = 1.0
-
-    smoothed = np.empty_like(y)
-    smoothed[0] = y[0]
-
-    for i in range(1, len(y)):
-        dt = max((x[i] - x[i - 1]) / base_dt, 1e-9)
-        weight = 1.0 - np.exp(-alpha * dt)
-        smoothed[i] = smoothed[i - 1] * (1.0 - weight) + y[i] * weight
-
-    return smoothed
-
-
-def maybe_smooth_curve(x_values, y_values):
-    if not ENABLE_TIME_WEIGHTED_EMA:
-        return np.asarray(y_values)
-    return smooth_time_weighted_ema(x_values, y_values)
 
 def _parse_folder_to_tokens_b(folder_name, pattern):
     """解析文件夹名得到 token(B)；若匹配到 checkpoint/step，则按“步数->token”换算。"""
@@ -443,7 +417,7 @@ def get_id_ood_tasks():
     return id_tasks, ood_tasks
 
 # =========================
-# 4. ASI 计算
+# 4. ACoE 计算
 # =========================
 
 def angle_func(a, b):
@@ -517,16 +491,16 @@ def process_single_task(args):
         return None
     z_ang, a_in, a_mid, a_out = metrics
     
-    # Calculate ASI_full (Including z_ang)
-    asi_full = (z_ang + a_in + a_mid + a_out) / 4.0
-    return tokens_b, asi_full
+    # Calculate ACoE (Including z_ang)
+    acoe = (z_ang + a_in + a_mid + a_out) / 4.0
+    return tokens_b, acoe
 
 def get_model_save_dir(model_key):
     return os.path.join(SAVE_DIR, model_key or "UnknownModel")
 
 
-def get_coe_cache_path(model_key):
-    return os.path.join(get_model_save_dir(model_key), COE_CACHE_FILENAME)
+def get_coe_cache_path(cache_key):
+    return os.path.join(ACOE_CACHE_DIR, cache_key or "UnknownModel", COE_CACHE_FILENAME)
 
 
 def collect_coe_step_map(root_path):
@@ -637,14 +611,16 @@ def save_coe_metrics_cache(cache_path, root_path, fingerprint, tokens, values):
     log_message(f"[COE Cache] saved: {cache_path}")
 
 
-def get_asi_metrics(root_path, batch_size=128, plot_interval=100, model_key="UnknownModel"):
+def get_asi_metrics(root_path, model_key="UnknownModel", cache_key=None, fallback_cache_paths=None):
     if not root_path:
         return [], []
 
-    cache_path = get_coe_cache_path(model_key)
-    cache_key = (root_path, model_key, batch_size, plot_interval)
-    if cache_key in ASI_CACHE:
-        return ASI_CACHE[cache_key]
+    resolved_cache_key = cache_key or model_key
+    cache_path = get_coe_cache_path(resolved_cache_key)
+    fallback_cache_paths = fallback_cache_paths or []
+    memory_cache_key = (root_path, resolved_cache_key)
+    if memory_cache_key in ACOE_CACHE:
+        return ACOE_CACHE[memory_cache_key]
 
     step_map = collect_coe_step_map(root_path)
     if not step_map:
@@ -653,8 +629,16 @@ def get_asi_metrics(root_path, batch_size=128, plot_interval=100, model_key="Unk
     fingerprint = build_coe_cache_fingerprint(step_map)
     cached_metrics = load_coe_metrics_cache(cache_path, root_path, fingerprint)
     if cached_metrics is not None:
-        ASI_CACHE[cache_key] = cached_metrics
+        ACOE_CACHE[memory_cache_key] = cached_metrics
         return cached_metrics
+
+    for fallback_cache_path in fallback_cache_paths:
+        cached_metrics = load_coe_metrics_cache(fallback_cache_path, root_path, fingerprint)
+        if cached_metrics is not None:
+            tokens, values = cached_metrics
+            save_coe_metrics_cache(cache_path, root_path, fingerprint, tokens, values)
+            ACOE_CACHE[memory_cache_key] = cached_metrics
+            return cached_metrics
 
     tasks = []
     for s in sorted(step_map.keys()):
@@ -672,12 +656,12 @@ def get_asi_metrics(root_path, batch_size=128, plot_interval=100, model_key="Unk
     final_results.sort(key=lambda x: x[0])
 
     tokens = [x[0] for x in final_results]
-    values = [x[1] for x in final_results] # ASI_full
+    values = [x[1] for x in final_results] # ACoE
 
     save_coe_metrics_cache(cache_path, root_path, fingerprint, tokens, values)
 
     metrics = (tokens, values)
-    ASI_CACHE[cache_key] = metrics
+    ACOE_CACHE[memory_cache_key] = metrics
     return metrics
 
 # =========================
@@ -687,6 +671,15 @@ def get_asi_metrics(root_path, batch_size=128, plot_interval=100, model_key="Unk
 # 提取出一个全局变量，方便你随时调整缩放比例
 # 例如：0.01 表示大于 stage1 的部分，每增加 10B 相当于前面 1000B (1TB) 的视觉宽度
 COMPRESSION_RATIO = 0.05
+ACOE_LINE_KWARGS = {
+    "color": "blue",
+    "linewidth": 0.35,
+    "marker": "o",
+    "markersize": 0.45,
+    "markeredgewidth": 0,
+    "alpha": 0.75,
+    "label": "ACoE",
+}
 
 def transform_x(x_seq, stage1_tokens, compression_ratio=COMPRESSION_RATIO):
     """
@@ -760,7 +753,12 @@ def draw_asi_plot_overall(model_key):
 
     try:
         if root:
-            asi_tokens, asi_values = get_asi_metrics(root, model_key=model_key)
+            asi_tokens, asi_values = get_asi_metrics(
+                root,
+                model_key=model_key,
+                cache_key=config.get("acoe_cache_key", model_key),
+                fallback_cache_paths=config.get("legacy_acoe_cache_paths"),
+            )
         else:
             asi_tokens, asi_values = [], []
     except Exception as e:
@@ -772,6 +770,7 @@ def draw_asi_plot_overall(model_key):
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.set_xlabel("Tokens (B)")
     ax.grid(True, linestyle=":", alpha=0.6)
+    legend_handles = []
 
     if stage1_tokens:
         ax.xaxis.set_major_formatter(ticker.FuncFormatter(
@@ -781,10 +780,9 @@ def draw_asi_plot_overall(model_key):
 
     if has_asi:
         asi_tx = transform_x(asi_tokens, stage1_tokens)
-        asi_values_sm = maybe_smooth_curve(asi_tokens, asi_values)
-        ax.plot(asi_tx, asi_values_sm, marker='o', linewidth=1, markersize=1, label="ASI_full", color='blue')
-        annotate_point_values(ax, asi_tx, asi_values_sm, color='blue')
-        ax.set_ylabel("ASI_full", color='blue')
+        acoe_line, = ax.plot(asi_tx, asi_values, **ACOE_LINE_KWARGS)
+        legend_handles.append(acoe_line)
+        ax.set_ylabel("ACoE", color='blue')
         ax.tick_params(axis='y', labelcolor='blue')
         ax2 = ax.twinx()
     else:
@@ -793,26 +791,23 @@ def draw_asi_plot_overall(model_key):
 
     if len(sft_tokens) > 0:
         sft_tx = transform_x(sft_tokens, stage1_tokens)
-        sft_avgs_sm = maybe_smooth_curve(sft_tokens, sft_avgs)
-        ax2.plot(sft_tx, sft_avgs_sm, color='red', linestyle='--', marker='D', label="SFT Avg")
-        annotate_point_values(ax2, sft_tx, sft_avgs_sm, color='red')
+        sft_line, = ax2.plot(sft_tx, sft_avgs, color='red', linestyle='--', marker='D', label="SFT Avg")
+        legend_handles.append(sft_line)
+        annotate_point_values(ax2, sft_tx, sft_avgs, color='red')
 
     if len(pt_tokens) > 0:
         pt_tx = transform_x(pt_tokens, stage1_tokens)
-        pt_avgs_sm = maybe_smooth_curve(pt_tokens, pt_avgs)
-        ax2.plot(pt_tx, pt_avgs_sm, color='green', linestyle='-.', marker='s', label="PT Avg")
-        annotate_point_values(ax2, pt_tx, pt_avgs_sm, color='green')
+        pt_line, = ax2.plot(pt_tx, pt_avgs, color='green', linestyle='-.', marker='s', label="PT Avg")
+        legend_handles.append(pt_line)
+        annotate_point_values(ax2, pt_tx, pt_avgs, color='green')
 
     ax2.set_ylabel("Average Score (PT & SFT All Tasks)")
 
-    lines = ax.get_lines()
-    if has_asi:
-        lines += ax2.get_lines()
+    labels = [h.get_label() for h in legend_handles]
+    if legend_handles:
+        ax.legend(legend_handles, labels, loc='lower center', bbox_to_anchor=(0.5, 1.02), ncol=3, frameon=False)
 
-    labels = [l.get_label() for l in lines]
-    ax.legend(lines, labels, loc='lower center', bbox_to_anchor=(0.5, 1.02), ncol=3, frameon=False)
-
-    ax.set_title(f"{model_key}: ASI_full vs Overall SFT & PT Performance",
+    ax.set_title(f"{model_key}: ACoE vs Overall SFT & PT Performance",
                  fontsize=14, fontweight='bold', pad=40)
 
     plt.tight_layout()
@@ -872,7 +867,12 @@ def draw_asi_plot_group(model_key, group_key):
 
     try:
         if root:
-            asi_tokens, asi_values = get_asi_metrics(root, model_key=model_key)
+            asi_tokens, asi_values = get_asi_metrics(
+                root,
+                model_key=model_key,
+                cache_key=config.get("acoe_cache_key", model_key),
+                fallback_cache_paths=config.get("legacy_acoe_cache_paths"),
+            )
         else:
             asi_tokens, asi_values = [], []
     except Exception as e:
@@ -884,6 +884,7 @@ def draw_asi_plot_group(model_key, group_key):
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.set_xlabel("Tokens (B)")
     ax.grid(True, linestyle=":", alpha=0.6)
+    legend_handles = []
 
     if stage1_tokens:
         ax.xaxis.set_major_formatter(ticker.FuncFormatter(
@@ -893,10 +894,9 @@ def draw_asi_plot_group(model_key, group_key):
 
     if has_asi:
         asi_tx = transform_x(asi_tokens, stage1_tokens)
-        asi_values_sm = maybe_smooth_curve(asi_tokens, asi_values)
-        ax.plot(asi_tx, asi_values_sm, marker='o', linewidth=1, markersize=1, label="ASI_full", color='blue')
-        annotate_point_values(ax, asi_tx, asi_values_sm, color='blue')
-        ax.set_ylabel("ASI_full", color='blue')
+        acoe_line, = ax.plot(asi_tx, asi_values, **ACOE_LINE_KWARGS)
+        legend_handles.append(acoe_line)
+        ax.set_ylabel("ACoE", color='blue')
         ax.tick_params(axis='y', labelcolor='blue')
         ax2 = ax.twinx()
     else:
@@ -914,48 +914,44 @@ def draw_asi_plot_group(model_key, group_key):
 
             tokens, scores = zip(*sft_data[task])
             tx = transform_x(tokens, stage1_tokens)
-            scores_sm = maybe_smooth_curve(tokens, scores)
 
-            ax2.plot(tx, scores_sm,
-                     linestyle='--',
-                     marker='D',
-                     color=color,
-                     linewidth=1,
-                     label=f"SFT-{task}")
-            annotate_point_values(ax2, tx, scores_sm, color=color)
+            sft_line, = ax2.plot(tx, scores,
+                                  linestyle='--',
+                                  marker='D',
+                                  color=color,
+                                  linewidth=1,
+                                  label=f"SFT-{task}")
+            legend_handles.append(sft_line)
+            annotate_point_values(ax2, tx, scores, color=color)
 
         if task in pt_data:
 
             tokens, scores = zip(*pt_data[task])
             tx = transform_x(tokens, stage1_tokens)
-            scores_sm = maybe_smooth_curve(tokens, scores)
 
-            ax2.plot(tx, scores_sm,
-                     linestyle='-.',
-                     marker='s',
-                     color=color,
-                     alpha=0.4,
-                     linewidth=1,
-                     label=f"PT-{task}")
-            annotate_point_values(ax2, tx, scores_sm, color=color)
+            pt_line, = ax2.plot(tx, scores,
+                                 linestyle='-.',
+                                 marker='s',
+                                 color=color,
+                                 alpha=0.4,
+                                 linewidth=1,
+                                 label=f"PT-{task}")
+            legend_handles.append(pt_line)
+            annotate_point_values(ax2, tx, scores, color=color)
 
     ax2.set_ylabel("Accuracy (PT & SFT)")
 
-    lines = ax.get_lines()
+    labels = [h.get_label() for h in legend_handles]
 
-    if has_asi:
-        lines += ax2.get_lines()
+    if legend_handles:
+        ax.legend(legend_handles, labels,
+                  loc='lower center',
+                  bbox_to_anchor=(0.5, 1.02),
+                  ncol=3,
+                  frameon=False,
+                  fontsize=9)
 
-    labels = [l.get_label() for l in lines]
-
-    ax.legend(lines, labels,
-              loc='lower center',
-              bbox_to_anchor=(0.5, 1.02),
-              ncol=3,
-              frameon=False,
-              fontsize=9)
-
-    ax.set_title(f"{model_key}: ASI_full vs {group['title']}",
+    ax.set_title(f"{model_key}: ACoE vs {group['title']}",
                  fontsize=14,
                  fontweight='bold',
                  pad=60)
@@ -999,7 +995,12 @@ def draw_asi_plot_id_ood(model_key, subset_name, task_subset):
 
     try:
         if root:
-            asi_tokens, asi_values = get_asi_metrics(root, model_key=model_key)
+            asi_tokens, asi_values = get_asi_metrics(
+                root,
+                model_key=model_key,
+                cache_key=config.get("acoe_cache_key", model_key),
+                fallback_cache_paths=config.get("legacy_acoe_cache_paths"),
+            )
         else:
             asi_tokens, asi_values = [], []
     except Exception as e:
@@ -1012,6 +1013,7 @@ def draw_asi_plot_id_ood(model_key, subset_name, task_subset):
 
     ax.set_xlabel("Tokens (B)")
     ax.grid(True, linestyle=":", alpha=0.6)
+    legend_handles = []
 
     if stage1_tokens:
         ax.xaxis.set_major_formatter(ticker.FuncFormatter(
@@ -1022,10 +1024,9 @@ def draw_asi_plot_id_ood(model_key, subset_name, task_subset):
 
     if has_asi:
         asi_tx = transform_x(asi_tokens, stage1_tokens)
-        asi_values_sm = maybe_smooth_curve(asi_tokens, asi_values)
-        ax.plot(asi_tx, asi_values_sm, marker='o', linewidth=1, markersize=1, label="ASI_full", color='blue')
-        annotate_point_values(ax, asi_tx, asi_values_sm, color='blue')
-        ax.set_ylabel("ASI_full", color='blue')
+        acoe_line, = ax.plot(asi_tx, asi_values, **ACOE_LINE_KWARGS)
+        legend_handles.append(acoe_line)
+        ax.set_ylabel("ACoE", color='blue')
         ax.tick_params(axis='y', labelcolor='blue')
         ax2 = ax.twinx()
     else:
@@ -1034,45 +1035,41 @@ def draw_asi_plot_id_ood(model_key, subset_name, task_subset):
     if len(sft_tokens) > 0:
 
         sft_tx = transform_x(sft_tokens, stage1_tokens)
-        sft_avgs_sm = maybe_smooth_curve(sft_tokens, sft_avgs)
 
-        ax2.plot(sft_tx,
-                 sft_avgs_sm,
-                 color='red',
-                 linestyle='--',
-                 marker='D',
-                 label=f"SFT {subset_name} Avg")
-        annotate_point_values(ax2, sft_tx, sft_avgs_sm, color='red')
+        sft_line, = ax2.plot(sft_tx,
+                              sft_avgs,
+                              color='red',
+                              linestyle='--',
+                              marker='D',
+                              label=f"SFT {subset_name} Avg")
+        legend_handles.append(sft_line)
+        annotate_point_values(ax2, sft_tx, sft_avgs, color='red')
 
     if len(pt_tokens) > 0:
 
         pt_tx = transform_x(pt_tokens, stage1_tokens)
-        pt_avgs_sm = maybe_smooth_curve(pt_tokens, pt_avgs)
 
-        ax2.plot(pt_tx,
-                 pt_avgs_sm,
-                 color='green',
-                 linestyle='-.',
-                 marker='s',
-                 label=f"PT {subset_name} Avg")
-        annotate_point_values(ax2, pt_tx, pt_avgs_sm, color='green')
+        pt_line, = ax2.plot(pt_tx,
+                             pt_avgs,
+                             color='green',
+                             linestyle='-.',
+                             marker='s',
+                             label=f"PT {subset_name} Avg")
+        legend_handles.append(pt_line)
+        annotate_point_values(ax2, pt_tx, pt_avgs, color='green')
 
     ax2.set_ylabel(f"{subset_name} Average Score")
 
-    lines = ax.get_lines()
+    labels = [h.get_label() for h in legend_handles]
 
-    if has_asi:
-        lines += ax2.get_lines()
+    if legend_handles:
+        ax.legend(legend_handles, labels,
+                  loc='lower center',
+                  bbox_to_anchor=(0.5, 1.02),
+                  ncol=3,
+                  frameon=False)
 
-    labels = [l.get_label() for l in lines]
-
-    ax.legend(lines, labels,
-              loc='lower center',
-              bbox_to_anchor=(0.5, 1.02),
-              ncol=3,
-              frameon=False)
-
-    ax.set_title(f"{model_key}: ASI_full vs {subset_name} Performance",
+    ax.set_title(f"{model_key}: ACoE vs {subset_name} Performance",
                  fontsize=14,
                  fontweight='bold',
                  pad=40)

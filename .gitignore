@@ -52,4 +52,6 @@ examples/wandb/
 #uv
 uv.lock
 
-HJXA/Analysis/SFT_Analysis/Acc_Figures
+HJXA/Analysis/SFT_Analysis
+
+*._*
